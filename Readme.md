@@ -1,7 +1,7 @@
 # Личный проект «Readme»
 
 * Студент: [Виталий Еченко](https://up.htmlacademy.ru/nodejs-2-individual/2/user/2251273).
-* Наставник: `Неизвестно`.
+* Наставник: [Владислав Поклонский](https://htmlacademy.ru/profile/id2210683).
 
 ---
 
