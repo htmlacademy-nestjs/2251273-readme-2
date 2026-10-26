@@ -1,14 +1,37 @@
-.vscode/
-/node_modules/
-/build/
-/lib/
-/dist/
-/docs/
-.idea/*
-
+# OS
 .DS_Store
-coverage
-*.log
 
-mongo-data/
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage
+
+# Node (any level)
+node_modules/
+
+# NX
+.nx/
+tmp/
+
+# Build output (any level)
+dist/
+build/
+lib/
+
+# Env
 .env
+.env.local
+
+# DB data
+mongo-data/
+postgres-data/
+pgadmin-data/
+
+# NX docs
+docs/

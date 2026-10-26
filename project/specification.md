@@ -198,3 +198,50 @@ npm run test:all
 - `notifications` и `gateway` — не входят в текущий этап ДЗ.
 - `JWT_SECRET` должен быть одинаковым во всех сервисах.
 - `USE_MONGODB=false` переключает users на in-memory (fallback для отладки).
+
+
+## Запуск PostgreSQL (content)
+
+Сервис `content` использует PostgreSQL 14 + Prisma ORM (в режиме `USE_PRISMA=true`).
+
+### 1. Запуск контейнеров
+
+```bash
+cd apps/content
+docker compose up -d
+docker compose ps
+```
+
+Ожидаемо — `readme-content-postgres Up (healthy)` и `readme-content-pgadmin Up (healthy)`.
+
+| Контейнер | Порт |
+|---|---|
+| `readme-content-postgres` | `5433` (наружу), `5432` (внутри) |
+| `readme-content-pgadmin` | `8083` (веб-интерфейс) |
+
+### 2. Настройка .env
+
+`apps/content/.env` содержит:
+- `POSTGRES_*` — для docker-compose;
+- `DATABASE_URL` — для Prisma;
+- `USE_PRISMA` — `true` (Prisma) / `false` (in-memory).
+
+### 3. Prisma-команды
+
+```bash
+npx nx run content:db-validate   # проверка схемы
+npx nx run content:db-generate   # генерация Prisma Client
+npx nx run content:db-migrate    # миграции
+npx nx run content:db-reset      # сброс БД
+npx nx run content:db-fill       # seed (2 поста)
+```
+
+### 4. PgAdmin
+
+http://localhost:8083 — `admin@readme.local` / `admin`.
+При подключении к серверу: host `postgres`, port `5432`, user `readme`, password `readme_password`, db `readme_content`.
+
+### 5. Переключение режимов
+
+- `USE_PRISMA=false` — in-memory (по умолчанию, smoke-тесты 73/73).
+- `USE_PRISMA=true` — Prisma + Postgres (базовый CRUD, без сортировки по likes/comments).
