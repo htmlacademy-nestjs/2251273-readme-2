@@ -6,13 +6,15 @@
     "test:users": "bash tools/test-users-api.sh",
     "test:content": "bash tools/test-content-api.sh",
     "test:files": "bash tools/test-files-api.sh",
-    "test:all": "bash tools/test-users-api.sh && bash tools/test-content-api.sh && bash tools/test-files-api.sh && bash tools/test-notifications-api.sh",
+    "test:all": "bash tools/test-users-api.sh && bash tools/test-content-api.sh && bash tools/test-files-api.sh && bash tools/test-notifications-api.sh && bash tools/test-gateway-api.sh",
     "postinstall": "prisma skills sync || exit 0",
-    "test:notifications": "bash tools/test-notifications-api.sh"
+    "test:notifications": "bash tools/test-notifications-api.sh",
+    "test:gateway": "bash tools/test-gateway-api.sh"
   },
   "private": true,
   "dependencies": {
     "@nestjs-modules/mailer": "^2.3.10",
+    "@nestjs/axios": "^12.0.1",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.0",
@@ -25,7 +27,7 @@
     "@prisma/client": "^6.19.3",
     "amqp-connection-manager": "^4.1.15",
     "amqplib": "^0.10.9",
-    "axios": "^1.6.0",
+    "axios": "^1.21.1",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",

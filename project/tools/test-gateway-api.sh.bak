@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# Smoke-test для API Gateway.
+# Требует: users (:3005), content (:3001), files (:3002), gateway (:3003).
+#
+# Запуск:  bash tools/test-gateway-api.sh
+# Переменные:  USERS_URL, CONTENT_URL, FILES_URL, GATEWAY_URL
+
+set -u
+
+USERS_URL="${USERS_URL:-http://localhost:3005}"
+CONTENT_URL="${CONTENT_URL:-http://localhost:3001}"
+FILES_URL="${FILES_URL:-http://localhost:3002}"
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:3003}"
+
+PASS=0
+FAIL=0
+FAILED_TESTS=()
+
+# --- helpers ---------------------------------------------------------------
+
+green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
+red()   { printf '\033[0;31m%s\033[0m\n' "$*"; }
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+
+check() {
+  local name="$1" expect="$2" actual="$3" body="${4:-}"
+  if [ "$expect" = "$actual" ]; then
+    green "  ✓ $name (HTTP $actual)"; PASS=$((PASS+1))
+  else
+    red "  ✗ $name (ожидалось $expect, получено $actual)"
+    [ -n "$body" ] && echo "    body: $(echo "$body" | head -c 300)"
+    FAIL=$((FAIL+1)); FAILED_TESTS+=("$name")
+  fi
+}
+
+check_contains() {
+  local name="$1" needle="$2" hay="$3"
+  if echo "$hay" | grep -qF "$needle"; then
+    green "  ✓ $name"; PASS=$((PASS+1))
+  else
+    red "  ✗ $name (не найдено: $needle)"
+    echo "    haystack: $(echo "$hay" | head -c 400)"
+    FAIL=$((FAIL+1)); FAILED_TESTS+=("$name")
+  fi
+}
+
+check_not_contains() {
+  local name="$1" needle="$2" hay="$3"
+  if echo "$hay" | grep -qF "$needle"; then
+    red "  ✗ $name (найдено лишнее: $needle)"
+    FAIL=$((FAIL+1)); FAILED_TESTS+=("$name")
+  else
+    green "  ✓ $name"; PASS=$((PASS+1))
+  fi
+}
+
+extract_json() {
+  echo "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1
+}
+
+HTTP_CODE=""
+BODY=""
+http_call() {
+  local response
+  response=$(curl -s --max-time 5 -w "\n%{http_code}" "$@" 2>/dev/null)
+  HTTP_CODE=$(echo "$response" | tail -n1)
+  BODY=$(echo "$response" | sed '$d')
+  [ -z "$HTTP_CODE" ] && HTTP_CODE="000"
+}
+
+# --- 0. доступность --------------------------------------------------------
+
+bold "▶ Доступность сервисов"
+
+for pair in "users:$USERS_URL" "content:$CONTENT_URL" "files:$FILES_URL" "gateway:$GATEWAY_URL"; do
+  name="${pair%%:*}"
+  url="${pair##*:}"
+  http_call "$url/api"
+  check "$name Swagger доступен" 200 "$HTTP_CODE" "$(echo "$BODY" | head -c 80)"
+  if [ "$HTTP_CODE" != "200" ]; then
+    red "$name недоступен. Запусти: npx nx run $name:serve"
+    exit 1
+  fi
+done
+
+# --- 1. OpenAPI ------------------------------------------------------------
+
+bold "▶ OpenAPI Gateway"
+
+http_call "$GATEWAY_URL/api-json"
+check "OpenAPI JSON доступен" 200 "$HTTP_CODE" ""
+check_contains "Есть /auth/register" "/auth/register" "$BODY"
+check_contains "Есть /auth/login"    "/auth/login"    "$BODY"
+check_contains "Есть /auth/refresh"  "/auth/refresh"  "$BODY"
+check_contains "Есть /users/{id}"    "/users/{id}"    "$BODY"
+check_contains "Есть /posts"         "/posts"         "$BODY"
+check_contains "Есть /posts/{id}"    "/posts/{id}"    "$BODY"
+
+# --- 2. JWT через Gateway -------------------------------------------------
+
+bold "▶ Регистрация + логин через Gateway"
+
+EMAIL="gateway-smoke-$(date +%s)-$RANDOM@example.com"
+PASSWORD="secret123"
+
+http_call -X POST "$GATEWAY_URL/auth/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"firstName\":\"Gateway\",\"lastName\":\"Tester\",\"password\":\"$PASSWORD\"}"
+check "POST /auth/register (proxy) → 201" 201 "$HTTP_CODE" "$BODY"
+USER_ID=$(extract_json "id" "$BODY")
+[ -z "$USER_ID" ] && { red "Нет USER_ID"; exit 1; }
+green "  → user id = $USER_ID"
+
+http_call -X POST "$GATEWAY_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+check "POST /auth/login (proxy) → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "Ответ содержит accessToken"  '"accessToken"'  "$BODY"
+check_contains "Ответ содержит refreshToken" '"refreshToken"' "$BODY"
+TOKEN=$(extract_json "accessToken" "$BODY")
+[ -z "$TOKEN" ] && { red "Нет токена"; exit 1; }
+AUTH_HEADER="Authorization: Bearer $TOKEN"
+green "  → токен получен (${#TOKEN} символов)"
+
+REFRESH_TOKEN=$(extract_json "refreshToken" "$BODY")
+http_call -X POST "$GATEWAY_URL/auth/refresh" \
+  -H "Content-Type: application/json" \
+  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}"
+check "POST /auth/refresh (proxy) → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "Новая пара: accessToken"  '"accessToken"'  "$BODY"
+
+# --- 3. Users через Gateway -----------------------------------------------
+
+bold "▶ Users proxy"
+
+http_call "$GATEWAY_URL/users/$USER_ID"
+check "GET /users/:id (proxy) → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "Есть email" '"email"' "$BODY"
+check_not_contains "Без passwordHash"     "passwordHash"     "$BODY"
+check_not_contains "Без refreshTokenHash" "refreshTokenHash" "$BODY"
+
+http_call "$GATEWAY_URL/users/not-a-valid-id"
+check "GET /users/not-a-valid-id → 400" 400 "$HTTP_CODE" "$BODY"
+
+# --- 4. Posts — создание через Gateway ------------------------------------
+
+bold "▶ Posts proxy + агрегация"
+
+POST_TITLE="Пост через Gateway $(date +%s)"
+http_call -X POST "$GATEWAY_URL/posts" \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"text\",\"title\":\"$POST_TITLE\",\"announcement\":\"$(printf 'a%.0s' {1..60})\",\"text\":\"$(printf 'a%.0s' {1..150})\"}"
+check "POST /posts (proxy) → 201" 201 "$HTTP_CODE" "$BODY"
+POST_ID=$(extract_json "id" "$BODY")
+[ -z "$POST_ID" ] && { red "Нет POST_ID"; exit 1; }
+green "  → post id = $POST_ID"
+check_contains "type=text" '"type":"text"' "$BODY"
+
+http_call -X POST "$GATEWAY_URL/posts" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"link","url":"https://example.com"}'
+check "POST /posts без токена → 401" 401 "$HTTP_CODE" "$BODY"
+
+# --- 5. Агрегация — детали поста -----------------------------------------
+
+bold "▶ Агрегация поста"
+
+http_call "$GATEWAY_URL/posts/$POST_ID"
+check "GET /posts/:id (агрегация) → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "Есть author"         '"author"'         "$BODY"
+check_contains "author.id"           "\"authorId\":\"$USER_ID\"" "$BODY"
+check_contains "author.email"        "\"email\":\"$EMAIL\""     "$BODY"
+check_contains "author.firstName"    '"firstName":"Gateway"'    "$BODY"
+check_contains "likesCount"          '"likesCount"'     "$BODY"
+check_contains "commentsCount"       '"commentsCount"'  "$BODY"
+
+# --- 6. Агрегация — список постов ----------------------------------------
+
+bold "▶ Агрегация списка"
+
+http_call "$GATEWAY_URL/posts?limit=3"
+check "GET /posts (агрегация) → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "Есть items"         '"items"'         "$BODY"
+check_contains "Есть total"         '"total"'         "$BODY"
+check_contains "Есть author"        '"author"'        "$BODY"
+check_contains "Есть likesCount"    '"likesCount"'    "$BODY"
+check_contains "Есть commentsCount" '"commentsCount"' "$BODY"
+
+# --- 7. Лайки/комментарии через Gateway ----------------------------------
+
+bold "▶ Лайки и комментарии (proxy)"
+
+http_call -X POST "$GATEWAY_URL/posts/$POST_ID/likes" -H "$AUTH_HEADER"
+check "POST /posts/:id/likes (proxy) → 201" 201 "$HTTP_CODE" "$BODY"
+
+http_call -X POST "$GATEWAY_URL/posts/$POST_ID/comments" \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Комментарий через Gateway"}'
+check "POST /posts/:id/comments (proxy) → 201" 201 "$HTTP_CODE" "$BODY"
+
+http_call "$GATEWAY_URL/posts/$POST_ID"
+check "GET /posts/:id после like/comment → 200" 200 "$HTTP_CODE" "$BODY"
+check_contains "likesCount=1"    '"likesCount":1'    "$BODY"
+check_contains "commentsCount=1" '"commentsCount":1' "$BODY"
+
+# --- 8. Очистка ------------------------------------------------------------
+
+bold "▶ Очистка"
+
+http_call -X DELETE "$GATEWAY_URL/posts/$POST_ID" -H "$AUTH_HEADER"
+check "DELETE /posts/:id (proxy) → 200" 200 "$HTTP_CODE" "$BODY"
+
+# --- 9. Итог --------------------------------------------------------------
+
+echo
+bold "═══════════════════════════════════════════"
+TOTAL=$((PASS+FAIL))
+if [ "$FAIL" -eq 0 ]; then
+  green "✓ Все тесты прошли: $PASS/$TOTAL"
+  exit 0
+else
+  red "✗ Провалено: $FAIL, успешно: $PASS (из $TOTAL)"
+  red "Список провалов:"
+  for t in "${FAILED_TESTS[@]}"; do red "  - $t"; done
+  exit 1
+fi

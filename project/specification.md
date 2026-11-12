@@ -304,6 +304,68 @@ NotificationsConsumer.handleSendEmail()
 MailService.sendNewPostsEmail() → SMTP → MailHog
 ```
 
+
+
+## API Gateway (:3003)
+
+Точка входа для фронтенда. Проксирует запросы к микросервисам и агрегирует ответы. Без бизнес-логики.
+
+### Запуск
+
+```bash
+npx nx run gateway:serve
+```
+
+Swagger: http://localhost:3003/api
+
+### Маршруты
+
+| Маршрут | Куда | Что |
+|---|---|---|
+| `POST /auth/register` | users | proxy |
+| `POST /auth/login` | users | proxy |
+| `POST /auth/refresh` | users | proxy |
+| `GET /users/:id` | users | proxy + try/catch (400/404) |
+| `PATCH /users/password` | users | proxy |
+| `GET /posts` | content + users | **агрегация** (author, likesCount, commentsCount) |
+| `GET /posts/:id` | content + users | **агрегация** |
+| `POST /posts` | content | proxy |
+| `PATCH /posts/:id` | content | proxy |
+| `DELETE /posts/:id` | content | proxy |
+| `POST /posts/:id/repost` | content | proxy |
+| `GET/POST /posts/:id/comments` | content | proxy |
+| `DELETE /comments/:id` | content | proxy |
+| `GET/POST/DELETE /posts/:id/likes` | content | proxy |
+
+### Агрегация
+
+`GET /posts` и `GET /posts/:id` обогащают каждый пост:
+- `author` — из users (`id`, `firstName`, `lastName`, `email`);
+- `likesCount` — из content;
+- `commentsCount` — из content.
+
+Используется `Promise.all` для параллельных запросов.
+
+### Аутентификация
+
+- `JwtStrategy` + `JwtAuthGuard` проверяют JWT.
+- Токен передаётся в целевой сервис через `@Headers('authorization')`.
+- Защищённые эндпоинты → 401 без токена.
+- Ошибки из целевых сервисов пробрасываются через `HttpException` (сохраняется статус).
+
+### Env
+
+```env
+JWT_SECRET=dev-secret
+PORT=3003
+```
+
+### Тесты
+
+```bash
+npm run test:gateway   # требует users, content, files, gateway
+```
+
 ## Заметки
 
 - `users` использует MongoDB (Mongoose), `content` и `files` — in-memory (для учебного проекта).
